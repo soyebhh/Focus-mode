@@ -143,12 +143,12 @@
     #app {
       position: relative;
       z-index: 2;
-      min-height: 100vh;
+      height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 60px 16px 120px; /* More space for top actions and bottom bars */
+      padding: 16px;
     }
 
     /* ── Top bar ───────────────────────────────────────────────── */
@@ -592,7 +592,7 @@
       backdrop-filter: blur(24px);
       border: 1px solid var(--clr-border);
       border-radius: 20px;
-      padding: clamp(20px, 5vw, 32px);
+      padding: 32px;
       width: 100%;
       max-width: 560px;
       max-height: 90vh;
@@ -799,24 +799,14 @@
 
     /* ── Responsive ───────────────────────────────────────────────── */
     @media (max-width: 600px) {
-      #app { padding: 80px 16px 140px; }
-      #ring-wrap { width: 280px; height: 280px; }
-      #timer-display { font-size: 60px; }
-      #btn-play { width: 64px; height: 64px; font-size: 1.3rem; }
-      #mode-tabs { gap: 4px; padding: 3px; }
-      .mode-tab { padding: 6px 12px; font-size: 0.65rem; }
-      #stats-bar { font-size: 0.7rem; padding: 10px 16px; bottom: 44px; max-width: 90vw; flex-wrap: wrap; justify-content: center; gap: 4px; border-radius: 20px; }
-      #settings-panel { width: 100%; padding-top: 60px; }
-      #btn-summary { bottom: 94px; font-size: 0.75rem; padding: 10px 20px; }
-      #scene-bar { right: 50%; transform: translateX(50%); bottom: 10px; width: auto; } /* Center scene bar on mobile */
-      #footer { bottom: 6px; font-size: 0.6rem; opacity: 0.5; }
-    }
-
-    @media (max-height: 700px) and (max-width: 600px) {
-      #app { padding: 60px 16px 120px; }
-      #ring-wrap { width: 240px; height: 240px; }
-      #timer-display { font-size: 50px; }
-      #timer-card { gap: 12px; }
+      #ring-wrap { width: 260px; height: 260px; }
+      #timer-display { font-size: clamp(48px, 16vw, 70px); }
+      #btn-play { width: 62px; height: 62px; font-size: 1.3rem; }
+      #stats-bar { font-size: 0.68rem; padding: 6px 12px; bottom: 36px; max-width: 86vw; flex-wrap: wrap; justify-content: center; }
+      #settings-panel { width: 100%; }
+      #btn-summary { bottom: 82px; font-size: 0.75rem; }
+      #scene-bar { right: 8px; bottom: 36px; }
+      #footer { bottom: 10px; }
     }
 
     /* ── Utility ──────────────────────────────────────────────────── */
