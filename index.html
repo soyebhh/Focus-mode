@@ -1,0 +1,1894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FocusMode — Pomodoro Timer</title>
+  <meta name="description" content="FocusMode — a cinematic Pomodoro timer to help you stay focused, track sessions, and reflect on what you accomplished." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- ============================================================
+       CONFIG — edit these values
+  ============================================================ -->
+  <script>
+    const GEMINI_KEY = ""; // ← paste your Gemini API key here
+
+    const CONFIG = {
+      defaultWork:       25,   // minutes
+      defaultShort:       5,
+      defaultLong:       15,
+      pomodorosUntilLong: 4,
+
+      // YouTube embed IDs for background scenes
+      scenes: [
+        { id: "jfKfPfyJRdk", label: "Night City",  thumb: "https://img.youtube.com/vi/jfKfPfyJRdk/mqdefault.jpg" },
+        { id: "q76bMs-NwRk", label: "Rainy Café",  thumb: "https://img.youtube.com/vi/q76bMs-NwRk/mqdefault.jpg" },
+        { id: "lTRiuFIWV54", label: "Forest",       thumb: "https://img.youtube.com/vi/lTRiuFIWV54/mqdefault.jpg" },
+      ],
+
+      // Free royalty-free rain audio
+      rainUrl: "https://cdn.pixabay.com/audio/2022/03/10/audio_1e5e9d5b74.mp3",
+    };
+  </script>
+
+  <!-- ============================================================
+       CSS
+  ============================================================ -->
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --clr-bg:        #0a0a0f;
+      --clr-surface:   rgba(255,255,255,0.04);
+      --clr-border:    rgba(255,255,255,0.08);
+      --clr-white:     #ffffff;
+      --clr-muted:     rgba(255,255,255,0.45);
+      --clr-accent:    #a78bfa;     /* purple */
+      --clr-accent2:   #7c3aed;
+      --clr-work:      #a78bfa;
+      --clr-short:     #34d399;
+      --clr-long:      #60a5fa;
+      --clr-flash:     rgba(255,255,255,0.92);
+      --radius:        16px;
+      --transition:    0.35s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    html, body {
+      height: 100%;
+      font-family: 'Space Grotesk', sans-serif;
+      background: var(--clr-bg);
+      color: var(--clr-white);
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Video background ──────────────────────────────────────── */
+    #scene-container {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .scene-iframe {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 177.78vh;   /* 16:9 */
+      height: 100vh;
+      min-width: 100%;
+      min-height: 56.25vw;
+      transform: translate(-50%,-50%);
+      opacity: 0;
+      transition: opacity 1.2s ease;
+      border: none;
+      pointer-events: none;
+    }
+    .scene-iframe.active { opacity: 0.35; }
+
+    /* Dark gradient overlay */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      background:
+        linear-gradient(to bottom,
+          rgba(8,8,15,0.75) 0%,
+          rgba(8,8,15,0.55) 40%,
+          rgba(8,8,15,0.65) 70%,
+          rgba(8,8,15,0.9)  100%);
+      pointer-events: none;
+    }
+
+    /* ── Flash animation ───────────────────────────────────────── */
+    #flash {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: var(--clr-flash);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.1s ease;
+    }
+    #flash.pop { opacity: 1; }
+
+    /* ── Session complete toast ────────────────────────────────── */
+    #session-toast {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%,-50%) scale(0.85);
+      z-index: 101;
+      background: rgba(167,139,250,0.15);
+      backdrop-filter: blur(24px);
+      border: 1px solid rgba(167,139,250,0.3);
+      border-radius: var(--radius);
+      padding: 28px 48px;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.4s ease, transform 0.4s ease;
+      pointer-events: none;
+    }
+    #session-toast.show {
+      opacity: 1;
+      transform: translate(-50%,-50%) scale(1);
+    }
+    #session-toast .toast-icon { font-size: 2.4rem; margin-bottom: 8px; }
+    #session-toast .toast-text { font-size: 1.1rem; font-weight: 600; letter-spacing: 0.04em; }
+
+    /* ── Layout shell ──────────────────────────────────────────── */
+    #app {
+      position: relative;
+      z-index: 2;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 16px 120px; /* More space for top actions and bottom bars */
+    }
+
+    /* ── Top bar ───────────────────────────────────────────────── */
+    #top-bar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+    }
+
+    #logo {
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      color: var(--clr-muted);
+      text-transform: uppercase;
+    }
+
+    #top-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .icon-btn {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      border: 1px solid var(--clr-border);
+      background: var(--clr-surface);
+      backdrop-filter: blur(12px);
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--clr-muted);
+      font-size: 1.1rem;
+      transition: color var(--transition), border-color var(--transition), background var(--transition);
+    }
+    .icon-btn:hover {
+      color: var(--clr-white);
+      border-color: rgba(167,139,250,0.5);
+      background: rgba(167,139,250,0.1);
+    }
+    .icon-btn.active {
+      color: var(--clr-accent);
+      border-color: rgba(167,139,250,0.5);
+    }
+
+    /* ── Main timer card ───────────────────────────────────────── */
+    #timer-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* Mode tabs */
+    #mode-tabs {
+      display: flex;
+      gap: 8px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--clr-border);
+      border-radius: 50px;
+      padding: 4px;
+      backdrop-filter: blur(12px);
+    }
+    .mode-tab {
+      padding: 6px 18px;
+      border-radius: 50px;
+      border: none;
+      background: transparent;
+      color: var(--clr-muted);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+    .mode-tab.active {
+      background: var(--clr-accent2);
+      color: var(--clr-white);
+    }
+
+    /* Mode label */
+    #mode-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.25em;
+      color: var(--clr-muted);
+      text-transform: uppercase;
+      transition: color var(--transition);
+    }
+    #mode-label.work  { color: var(--clr-work); }
+    #mode-label.short { color: var(--clr-short); }
+    #mode-label.long  { color: var(--clr-long); }
+
+    /* Timer display */
+    #timer-display {
+      font-size: clamp(60px, 10vw, 100px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1;
+      color: var(--clr-white);
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      width: 100%;
+      text-shadow: 0 0 80px rgba(167,139,250,0.25);
+      transition: color var(--transition);
+    }
+
+    /* Ring progress */
+    #ring-wrap {
+      position: relative;
+      width: 380px;
+      height: 380px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    #ring-wrap svg {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    #ring-track { stroke: rgba(255,255,255,0.07); }
+    #ring-progress {
+      stroke: var(--clr-accent);
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1s linear, stroke var(--transition);
+    }
+
+    /* Controls */
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    #btn-play {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: none;
+      background: var(--clr-white);
+      color: var(--clr-bg);
+      font-size: 1.5rem;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 8px 32px rgba(167,139,250,0.35);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    #btn-play:hover  { transform: scale(1.08); box-shadow: 0 12px 40px rgba(167,139,250,0.5); }
+    #btn-play:active { transform: scale(0.96); }
+
+    #btn-reset {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: 1px solid var(--clr-border);
+      background: var(--clr-surface);
+      color: var(--clr-muted);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(8px);
+      transition: all var(--transition);
+    }
+    #btn-reset:hover { color: var(--clr-white); border-color: rgba(255,255,255,0.2); }
+
+    #btn-skip {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: 1px solid var(--clr-border);
+      background: var(--clr-surface);
+      color: var(--clr-muted);
+      font-size: 1rem;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      backdrop-filter: blur(8px);
+      transition: all var(--transition);
+    }
+    #btn-skip:hover { color: var(--clr-white); border-color: rgba(255,255,255,0.2); }
+
+    /* Session dots */
+    #session-dots {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .s-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      border: 2px solid rgba(167,139,250,0.4);
+      background: transparent;
+      transition: all 0.4s ease;
+    }
+    .s-dot.done {
+      background: var(--clr-accent);
+      border-color: var(--clr-accent);
+      box-shadow: 0 0 10px rgba(167,139,250,0.6);
+    }
+
+    /* ── Stats bar ─────────────────────────────────────────────── */
+    #stats-bar {
+      position: fixed;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      color: var(--clr-muted);
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      background: var(--clr-surface);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--clr-border);
+      border-radius: 50px;
+      padding: 8px 20px;
+    }
+    #stats-bar .sep { opacity: 0.3; margin: 0 2px; }
+
+    /* ── Summary button ─────────────────────────────────────────── */
+    #btn-summary {
+      position: fixed;
+      bottom: 88px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      background: rgba(167,139,250,0.15);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(167,139,250,0.35);
+      border-radius: 50px;
+      padding: 10px 24px;
+      color: var(--clr-accent);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      transition: all var(--transition);
+    }
+    #btn-summary:hover {
+      background: rgba(167,139,250,0.25);
+      border-color: rgba(167,139,250,0.6);
+    }
+    #btn-summary.visible { display: flex; }
+
+    /* ── Scene switcher ─────────────────────────────────────────── */
+    #scene-bar {
+      position: fixed;
+      bottom: 40px;
+      right: 24px;
+      z-index: 10;
+      display: flex;
+      gap: 8px;
+    }
+    .scene-btn {
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      border: 2px solid transparent;
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color var(--transition), transform 0.2s;
+      background: #111;
+    }
+    .scene-btn img { width: 100%; height: 100%; object-fit: cover; opacity: 0.7; }
+    .scene-btn.active { border-color: var(--clr-accent); }
+    .scene-btn:hover { transform: scale(1.1); }
+
+    /* ── Footer ─────────────────────────────────────────────────── */
+    #footer {
+      position: fixed;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      font-size: 0.65rem;
+      color: rgba(255,255,255,0.2);
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+    }
+    #footer a { color: inherit; text-decoration: none; }
+    #footer a:hover { color: rgba(255,255,255,0.4); }
+
+    /* ── Settings panel ─────────────────────────────────────────── */
+    #settings-panel {
+      position: fixed;
+      top: 0; right: 0;
+      height: 100%;
+      width: 360px;
+      max-width: 95vw;
+      z-index: 50;
+      background: rgba(10,10,20,0.92);
+      backdrop-filter: blur(24px);
+      border-left: 1px solid var(--clr-border);
+      padding: 72px 28px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      transform: translateX(100%);
+      transition: transform var(--transition);
+      overflow-y: auto;
+    }
+    #settings-panel.open { transform: translateX(0); }
+
+    .settings-section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--clr-muted);
+      margin-bottom: 4px;
+    }
+
+    .settings-close {
+      position: absolute;
+      top: 18px; right: 18px;
+      background: none;
+      border: none;
+      color: var(--clr-muted);
+      font-size: 1.3rem;
+      cursor: pointer;
+    }
+    .settings-close:hover { color: var(--clr-white); }
+
+    /* Slider */
+    .slider-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.84rem;
+      color: var(--clr-white);
+    }
+    .slider-label span { color: var(--clr-accent); font-weight: 600; }
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255,255,255,0.12);
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: var(--clr-accent);
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(167,139,250,0.5);
+    }
+
+    /* Toggle */
+    .toggle-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.88rem;
+      color: var(--clr-white);
+    }
+    .toggle {
+      position: relative;
+      width: 44px; height: 24px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: rgba(255,255,255,0.12);
+      border-radius: 50px;
+      cursor: pointer;
+      transition: background var(--transition);
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      left: 3px; top: 3px;
+      transition: transform var(--transition);
+    }
+    .toggle input:checked + .toggle-slider { background: var(--clr-accent2); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+    /* Scene thumbnails in settings */
+    #settings-scenes {
+      display: flex;
+      gap: 10px;
+    }
+    .settings-scene-btn {
+      flex: 1;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 2px solid transparent;
+      cursor: pointer;
+      background: #111;
+      transition: border-color var(--transition);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      padding-bottom: 6px;
+    }
+    .settings-scene-btn img { width: 100%; aspect-ratio: 16/9; object-fit: cover; opacity: 0.7; }
+    .settings-scene-btn span { font-size: 0.68rem; color: var(--clr-muted); }
+    .settings-scene-btn.active { border-color: var(--clr-accent); }
+
+    /* ── Summary / "Aaj Kya Kiya" modal ──────────────────────────── */
+    #summary-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(8px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--transition);
+    }
+    #summary-modal.open { opacity: 1; pointer-events: all; }
+
+    #summary-box {
+      background: rgba(12,12,24,0.95);
+      backdrop-filter: blur(24px);
+      border: 1px solid var(--clr-border);
+      border-radius: 20px;
+      padding: clamp(20px, 5vw, 32px);
+      width: 100%;
+      max-width: 560px;
+      max-height: 90vh;
+      overflow-y: auto;
+      transform: translateY(24px) scale(0.97);
+      transition: transform var(--transition);
+    }
+    #summary-modal.open #summary-box { transform: translateY(0) scale(1); }
+
+    #summary-box h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
+    }
+    #summary-tagline {
+      font-size: 0.78rem;
+      color: var(--clr-muted);
+      margin-bottom: 20px;
+    }
+
+    #summary-input {
+      width: 100%;
+      min-height: 100px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--clr-border);
+      border-radius: 10px;
+      padding: 14px;
+      color: var(--clr-white);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.9rem;
+      resize: vertical;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+    #summary-input:focus { border-color: rgba(167,139,250,0.5); }
+    #summary-input::placeholder { color: rgba(255,255,255,0.25); }
+
+    #btn-generate {
+      margin-top: 14px;
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      background: var(--clr-accent2);
+      color: #fff;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition), transform 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    #btn-generate:hover  { background: #6d28d9; }
+    #btn-generate:active { transform: scale(0.98); }
+    #btn-generate:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #ai-result {
+      margin-top: 20px;
+      padding: 18px;
+      background: rgba(167,139,250,0.08);
+      border: 1px solid rgba(167,139,250,0.2);
+      border-radius: 12px;
+      font-size: 0.9rem;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.88);
+      display: none;
+    }
+    #ai-result.show { display: block; }
+    #ai-result .ai-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      color: var(--clr-accent);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    /* Past summaries */
+    #past-summaries { margin-top: 24px; }
+    #past-summaries h3 {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--clr-muted);
+      margin-bottom: 12px;
+    }
+    .past-entry {
+      padding: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--clr-border);
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .past-entry-date {
+      font-size: 0.7rem;
+      color: var(--clr-muted);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .past-entry-text { font-size: 0.84rem; line-height: 1.6; }
+
+    #summary-close {
+      position: absolute;
+      top: 16px; right: 16px;
+      background: none;
+      border: none;
+      color: var(--clr-muted);
+      font-size: 1.3rem;
+      cursor: pointer;
+    }
+    #summary-close:hover { color: var(--clr-white); }
+    #summary-box { position: relative; }
+
+    /* ── Loading spinner ──────────────────────────────────────────── */
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── YouTube custom input ─────────────────────────────────────── */
+    .yt-input-wrap {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    #custom-yt-input {
+      flex: 1;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--clr-border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: var(--clr-white);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.8rem;
+      outline: none;
+      transition: border-color var(--transition);
+    }
+    #custom-yt-input:focus { border-color: rgba(167,139,250,0.5); }
+    #custom-yt-input::placeholder { color: rgba(255,255,255,0.25); font-size: 0.74rem; }
+    #btn-apply-yt {
+      padding: 9px 14px;
+      border: none;
+      border-radius: 8px;
+      background: var(--clr-accent2);
+      color: #fff;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background var(--transition);
+      white-space: nowrap;
+    }
+    #btn-apply-yt:hover { background: #6d28d9; }
+    #yt-status {
+      font-size: 0.72rem;
+      color: var(--clr-accent);
+      margin-top: 6px;
+      min-height: 16px;
+    }
+    .yt-suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .yt-suggestion-label {
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.3);
+      margin-bottom: 4px;
+    }
+    .yt-chip {
+      padding: 5px 11px;
+      border-radius: 50px;
+      border: 1px solid rgba(167,139,250,0.3);
+      background: rgba(167,139,250,0.08);
+      color: var(--clr-accent);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+    }
+    .yt-chip:hover {
+      background: rgba(167,139,250,0.2);
+      border-color: rgba(167,139,250,0.6);
+      color: #fff;
+    }
+    /* Background video hide transition */
+    #scene-container {
+      transition: opacity 1s ease;
+    }
+
+    /* ── Responsive ───────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      #app { padding: 80px 16px 140px; }
+      #ring-wrap { width: 280px; height: 280px; }
+      #timer-display { font-size: 60px; }
+      #btn-play { width: 64px; height: 64px; font-size: 1.3rem; }
+      #mode-tabs { gap: 4px; padding: 3px; }
+      .mode-tab { padding: 6px 12px; font-size: 0.65rem; }
+      #stats-bar { font-size: 0.7rem; padding: 10px 16px; bottom: 44px; max-width: 90vw; flex-wrap: wrap; justify-content: center; gap: 4px; border-radius: 20px; }
+      #settings-panel { width: 100%; padding-top: 60px; }
+      #btn-summary { bottom: 94px; font-size: 0.75rem; padding: 10px 20px; }
+      #scene-bar { right: 50%; transform: translateX(50%); bottom: 10px; width: auto; } /* Center scene bar on mobile */
+      #footer { bottom: 6px; font-size: 0.6rem; opacity: 0.5; }
+    }
+
+    @media (max-height: 700px) and (max-width: 600px) {
+      #app { padding: 60px 16px 120px; }
+      #ring-wrap { width: 240px; height: 240px; }
+      #timer-display { font-size: 50px; }
+      #timer-card { gap: 12px; }
+    }
+
+    /* ── Utility ──────────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+    .sr-only { position: absolute; width: 1px; height: 1px; clip: rect(0,0,0,0); overflow: hidden; }
+  </style>
+</head>
+
+<!-- ============================================================
+     HTML
+============================================================ -->
+<body>
+
+  <!-- Background video scenes -->
+  <div id="scene-container"></div>
+  <!-- Dark overlay -->
+  <div id="overlay"></div>
+  <!-- Flash overlay for session complete -->
+  <div id="flash"></div>
+  <!-- Session complete toast -->
+  <div id="session-toast" role="status" aria-live="polite">
+    <div class="toast-icon">✓</div>
+    <div class="toast-text" id="toast-text">Session Complete!</div>
+  </div>
+
+  <!-- Top bar -->
+  <header id="top-bar">
+    <div id="logo">Focus<span style="color:var(--clr-accent)">Mode</span></div>
+    <div id="top-actions">
+      <button class="icon-btn" id="btn-sound" title="Toggle ambient sound" aria-label="Toggle sound">🔇</button>
+      <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Open settings">⚙️</button>
+    </div>
+  </header>
+
+  <!-- Main app -->
+  <main id="app">
+    <div id="timer-card">
+
+      <!-- Mode tabs -->
+      <nav id="mode-tabs" role="tablist">
+        <button class="mode-tab active" data-mode="work"  role="tab" id="tab-work">Focus</button>
+        <button class="mode-tab" data-mode="short" role="tab" id="tab-short">Short Break</button>
+        <button class="mode-tab" data-mode="long"  role="tab" id="tab-long">Long Break</button>
+      </nav>
+
+      <!-- Mode label -->
+      <div id="mode-label" class="work">FOCUS</div>
+
+      <!-- Timer + ring -->
+      <div id="ring-wrap">
+        <svg id="ring-svg" width="380" height="380" viewBox="0 0 380 380">
+          <circle id="ring-track"    cx="190" cy="190" r="178" fill="none" stroke-width="3"/>
+          <circle id="ring-progress" cx="190" cy="190" r="178" fill="none" stroke-width="3"
+                  stroke-dasharray="1119" stroke-dashoffset="0" transform="rotate(-90 190 190)"/>
+        </svg>
+        <div id="timer-display" role="timer" aria-live="off">25:00</div>
+      </div>
+
+      <!-- Controls -->
+      <div id="controls">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+          <button id="btn-reset" title="Reset timer" aria-label="Reset">↺</button>
+          <span style="font-size:0.55rem;letter-spacing:0.1em;color:rgba(255,255,255,0.3);text-transform:uppercase">Reset</span>
+        </div>
+        <button id="btn-play"  title="Start / Pause" aria-label="Start">▶</button>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+          <button id="btn-skip"  title="Skip to next" aria-label="Skip">⏭</button>
+          <span style="font-size:0.55rem;letter-spacing:0.1em;color:rgba(255,255,255,0.3);text-transform:uppercase">Skip</span>
+        </div>
+      </div>
+
+      <!-- Session dots -->
+      <div id="session-dots" aria-label="Session progress">
+        <div class="s-dot" data-dot="0"></div>
+        <div class="s-dot" data-dot="1"></div>
+        <div class="s-dot" data-dot="2"></div>
+        <div class="s-dot" data-dot="3"></div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Aaj Kya Kiya button -->
+  <button id="btn-summary" aria-haspopup="dialog">✦ Aaj Kya Kiya</button>
+
+  <!-- Stats bar -->
+  <div id="stats-bar">
+    <span id="stat-sessions">0 sessions</span>
+    <span class="sep">·</span>
+    <span id="stat-mins">0 mins focused</span>
+    <span class="sep">·</span>
+    <span id="stat-streak">🔥 0 day streak</span>
+  </div>
+
+  <!-- Scene switcher (bottom right) -->
+  <div id="scene-bar"></div>
+
+  <!-- Footer -->
+  <footer id="footer">FocusMode · Built by <a href="https://soyeb.in" target="_blank" rel="noopener">Soyeb</a> · <a href="https://soyeb.in" target="_blank" rel="noopener">soyeb.in</a></footer>
+
+  <!-- Settings panel -->
+  <aside id="settings-panel" role="dialog" aria-label="Settings" aria-hidden="true">
+    <button class="settings-close" id="settings-close" aria-label="Close settings">✕</button>
+    <div>
+      <div class="settings-section-title">Durations</div>
+      <div class="slider-row">
+        <label for="slider-work" class="slider-label">Work <span id="val-work">25</span> min</label>
+        <input type="range" id="slider-work" min="15" max="60" value="25" />
+      </div>
+      <br/>
+      <div class="slider-row">
+        <label for="slider-short" class="slider-label">Short Break <span id="val-short">5</span> min</label>
+        <input type="range" id="slider-short" min="1" max="15" value="5" />
+      </div>
+      <br/>
+      <div class="slider-row">
+        <label for="slider-long" class="slider-label">Long Break <span id="val-long">15</span> min</label>
+        <input type="range" id="slider-long" min="10" max="30" value="15" />
+      </div>
+    </div>
+
+    <div>
+      <div class="settings-section-title" style="margin-bottom:12px">Scene</div>
+      <div id="settings-scenes"></div>
+    </div>
+
+    <div>
+      <div class="settings-section-title" style="margin-bottom:12px">Options</div>
+      <div class="toggle-row">
+        <span>Auto-start breaks</span>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-autobreak" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <br/>
+      <div class="toggle-row">
+        <span>Ambient sound (rain)</span>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-sound" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Custom YouTube BG -->
+    <div>
+      <div class="settings-section-title" style="margin-bottom:10px">Custom YouTube BG</div>
+      <div class="yt-input-wrap">
+        <input type="text" id="custom-yt-input" placeholder="Paste YouTube URL or video ID" />
+        <button id="btn-apply-yt">Apply</button>
+      </div>
+      <div id="yt-status"></div>
+      <div class="yt-suggestion-label" style="margin-top:10px">Quick picks</div>
+      <div class="yt-suggestions">
+        <button class="yt-chip" data-ytid="oafxkMv4xnc" title="Bairan – Banjaare">🎵 Bairan</button>
+        <button class="yt-chip" data-ytid="9T-Zbxg9X_4" title="Lo-fi chill mix">🌙 Lo-fi Mix</button>
+        <button class="yt-chip" data-ytid="WSMZn4i1tJ4" title="Arz Kiya Hai – Anuv Jain">🎶 Anuv Jain</button>
+      </div>
+      <br/>
+      <div class="toggle-row">
+        <span>Show background video</span>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-bg-video" checked />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <br/>
+      <div class="toggle-row">
+        <span>Play video with audio 🔊</span>
+        <label class="toggle">
+          <input type="checkbox" id="toggle-yt-audio" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <!-- Reset all settings -->
+      <div style="margin-top: 40px; border-top: 1px solid var(--clr-border); padding-top: 24px;">
+        <button id="btn-reset-all" style="width:100%; padding:12px; border-radius:10px; border:1px solid rgba(239,68,68,0.3); background:rgba(239,68,68,0.05); color:#ef4444; font-family:'Space Grotesk', sans-serif; font-size:0.8rem; font-weight:600; cursor:pointer; transition:all var(--transition);">
+          Reset All Settings & Stats
+        </button>
+        <p style="font-size:0.65rem; color:var(--clr-muted); text-align:center; margin-top:8px;">This will clear all your preferences and focus data.</p>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Summary / Aaj Kya Kiya modal -->
+  <div id="summary-modal" role="dialog" aria-modal="true" aria-label="Aaj Kya Kiya – Daily Summary">
+    <div id="summary-box">
+      <button id="summary-close" aria-label="Close">✕</button>
+      <h2>✦ Aaj Kya Kiya?</h2>
+      <p id="summary-tagline">Tell me what you got done today — I'll write you something worth remembering.</p>
+      <textarea id="summary-input" placeholder="e.g. Fixed the API bug, designed the landing page, reviewed 3 PRs..." rows="4"></textarea>
+      <button id="btn-generate">
+        <span id="gen-label">Generate with AI ✨</span>
+        <div class="spinner hidden" id="gen-spinner"></div>
+      </button>
+      <div id="ai-result">
+        <div class="ai-label">✦ Your Summary</div>
+        <div id="ai-text"></div>
+      </div>
+      <div id="past-summaries">
+        <h3>Past 7 Days</h3>
+        <div id="past-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio is generated via Web Audio API — no external files needed -->
+
+<!-- ============================================================
+     JS
+============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  /* ── CONSTANTS ─────────────────────────────────────────────── */
+  const CIRCUMFERENCE = 1119; // 2 * π * 178 ≈ 1118.74 (ring r=178)
+  const STORAGE_KEY   = "focusmode_v3";
+  const SUMMARY_KEY   = "focusmode_summaries";
+
+  /* ── STATE ─────────────────────────────────────────────────── */
+  let state = {
+    mode:           "work",   // work | short | long
+    isRunning:      false,
+    pomodoroCount:  0,        // within current cycle (0–3)
+    workDuration:   CONFIG.defaultWork,
+    shortDuration:  CONFIG.defaultShort,
+    longDuration:   CONFIG.defaultLong,
+    totalSecondsRemaining: CONFIG.defaultWork * 60,
+    totalSecondsForMode:   CONFIG.defaultWork * 60,
+    autoBreak:      false,
+    soundOn:        false,
+    currentScene:   0,
+    todayKey:       todayStr(),
+    todaySessions:  0,
+    todayMins:      0,
+    streak:         0,
+    lastActiveDay:  "",
+    showSummaryBtn: false,
+    // custom YouTube
+    customYtId:     null,
+    ytAudioOn:      false,
+    bgVideoVisible: true,
+  };
+
+  let tickInterval = null;
+
+  /* ── WEB AUDIO API — synthesized rain + bell ───────────────── */
+  let _audioCtx   = null;
+  let _rainSource = null;
+  let _rainGain   = null;
+  let _rainFilter = null;
+
+  function getAudioCtx() {
+    if (!_audioCtx) {
+      _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    return _audioCtx;
+  }
+
+  // Build a looping white-noise rain node (lazy, built once)
+  function buildRainGraph() {
+    if (_rainSource) return;             // already built
+    const ctx    = getAudioCtx();
+    const sr     = ctx.sampleRate;
+    const len    = sr * 3;               // 3-second noise tile
+    const buf    = ctx.createBuffer(2, len, sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const data = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+    }
+    _rainSource        = ctx.createBufferSource();
+    _rainSource.buffer = buf;
+    _rainSource.loop   = true;
+
+    _rainFilter           = ctx.createBiquadFilter();
+    _rainFilter.type      = 'lowpass';
+    _rainFilter.frequency.value = 1800;
+    _rainFilter.Q.value   = 0.5;
+
+    _rainGain              = ctx.createGain();
+    _rainGain.gain.value   = 0;          // start silent
+
+    _rainSource.connect(_rainFilter);
+    _rainFilter.connect(_rainGain);
+    _rainGain.connect(ctx.destination);
+    _rainSource.start(0);
+  }
+
+  function startRain() {
+    buildRainGraph();
+    const ctx = getAudioCtx();
+    _rainGain.gain.cancelScheduledValues(ctx.currentTime);
+    _rainGain.gain.setTargetAtTime(0.18, ctx.currentTime, 0.8);
+  }
+
+  function stopRain() {
+    if (!_rainGain) return;
+    const ctx = getAudioCtx();
+    _rainGain.gain.cancelScheduledValues(ctx.currentTime);
+    _rainGain.gain.setTargetAtTime(0, ctx.currentTime, 0.5);
+  }
+
+  // Synthesized bell chime — no files needed
+  function playBell() {
+    try {
+      const ctx  = getAudioCtx();
+      const now  = ctx.currentTime;
+      // Fundamental + two overtones for a richer bell
+      [[880, 0.35], [1320, 0.20], [2200, 0.10]].forEach(([freq, vol]) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(vol, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 2.5);
+      });
+    } catch(e) {}
+  }
+
+  /* ── HELPERS ───────────────────────────────────────────────── */
+  function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  }
+
+  function pad(n) { return String(n).padStart(2, "0"); }
+
+  function formatTime(secs) {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${pad(m)}:${pad(s)}`;
+  }
+
+  function modeLabel(mode) {
+    return { work: "FOCUS", short: "SHORT BREAK", long: "LONG BREAK" }[mode];
+  }
+
+  /* ── STORAGE ───────────────────────────────────────────────── */
+  function saveState() {
+    const data = {
+      workDuration:  state.workDuration,
+      shortDuration: state.shortDuration,
+      longDuration:  state.longDuration,
+      autoBreak:     state.autoBreak,
+      soundOn:       state.soundOn,
+      currentScene:  state.currentScene,
+      todayKey:      state.todayKey,
+      todaySessions: state.todaySessions,
+      todayMins:     state.todayMins,
+      streak:        state.streak,
+      lastActiveDay: state.lastActiveDay,
+      showSummaryBtn:state.showSummaryBtn,
+      pomodoroCount: state.pomodoroCount,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      const today = todayStr();
+
+      // midnight reset
+      if (data.todayKey !== today) {
+        data.todaySessions  = 0;
+        data.todayMins      = 0;
+        data.showSummaryBtn = false;
+        data.todayKey       = today;
+        data.pomodoroCount  = 0;
+      }
+
+      Object.assign(state, data);
+      state.totalSecondsRemaining = state.workDuration * 60;
+      state.totalSecondsForMode   = state.workDuration * 60;
+      state.mode = "work";
+    } catch (e) { /* corrupt storage — ignore */ }
+  }
+
+  function saveSummary(entry) {
+    try {
+      let list = JSON.parse(localStorage.getItem(SUMMARY_KEY) || "[]");
+      list.unshift(entry);
+      list = list.slice(0, 7);
+      localStorage.setItem(SUMMARY_KEY, JSON.stringify(list));
+    } catch(e){}
+  }
+
+  function loadSummaries() {
+    try { return JSON.parse(localStorage.getItem(SUMMARY_KEY) || "[]"); }
+    catch(e){ return []; }
+  }
+
+  /* ── DOM REFS ──────────────────────────────────────────────── */
+  const $timer      = document.getElementById("timer-display");
+  const $modeLabel  = document.getElementById("mode-label");
+  const $btnPlay    = document.getElementById("btn-play");
+  const $btnReset   = document.getElementById("btn-reset");
+  const $btnSkip    = document.getElementById("btn-skip");
+  const $ring       = document.getElementById("ring-progress");
+  const $flash      = document.getElementById("flash");
+  const $toast      = document.getElementById("session-toast");
+  const $toastText  = document.getElementById("toast-text");
+  const $statsSession = document.getElementById("stat-sessions");
+  const $statsMins    = document.getElementById("stat-mins");
+  const $statsStreak  = document.getElementById("stat-streak");
+  const $btnSummary = document.getElementById("btn-summary");
+  const $summaryModal= document.getElementById("summary-modal");
+  const $summaryClose= document.getElementById("summary-close");
+  const $summaryInput= document.getElementById("summary-input");
+  const $btnGenerate= document.getElementById("btn-generate");
+  const $genLabel   = document.getElementById("gen-label");
+  const $genSpinner = document.getElementById("gen-spinner");
+  const $aiResult   = document.getElementById("ai-result");
+  const $aiText     = document.getElementById("ai-text");
+  const $pastList   = document.getElementById("past-list");
+  const $settingsPanel= document.getElementById("settings-panel");
+  const $btnSettings= document.getElementById("btn-settings");
+  const $settingsClose= document.getElementById("settings-close");
+  const $btnSound   = document.getElementById("btn-sound");
+  const $sliderWork = document.getElementById("slider-work");
+  const $sliderShort= document.getElementById("slider-short");
+  const $sliderLong = document.getElementById("slider-long");
+  const $valWork    = document.getElementById("val-work");
+  const $valShort   = document.getElementById("val-short");
+  const $valLong    = document.getElementById("val-long");
+  const $toggleAutoBreak = document.getElementById("toggle-autobreak");
+  const $toggleSound     = document.getElementById("toggle-sound");
+  const $toggleBgVideo   = document.getElementById("toggle-bg-video");
+  const $toggleYtAudio   = document.getElementById("toggle-yt-audio");
+  const $customYtInput   = document.getElementById("custom-yt-input");
+  const $btnApplyYt      = document.getElementById("btn-apply-yt");
+  const $ytStatus        = document.getElementById("yt-status");
+  const $sceneContainer  = document.getElementById("scene-container");
+  const $sceneBar   = document.getElementById("scene-bar");
+  const $modeTabs   = document.querySelectorAll(".mode-tab");
+  const $dots       = document.querySelectorAll(".s-dot");
+  const $btnResetAll = document.getElementById("btn-reset-all");
+
+  /* ── SCENE / VIDEO ─────────────────────────────────────────── */
+  const sceneFrames = [];
+
+  function buildScenes() {
+    const container = document.getElementById("scene-container");
+    CONFIG.scenes.forEach((scene, i) => {
+      const iframe = document.createElement("iframe");
+      iframe.className = "scene-iframe";
+      iframe.setAttribute("allow", "autoplay; encrypted-media");
+      iframe.setAttribute("allowfullscreen", "");
+      iframe.setAttribute("title", scene.label + " background");
+      // autoplay, mute, loop, controls hidden via modestbranding
+      iframe.src = `https://www.youtube.com/embed/${scene.id}?autoplay=1&mute=1&loop=1&playlist=${scene.id}&controls=0&disablekb=1&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3`;
+      container.appendChild(iframe);
+      sceneFrames.push(iframe);
+    });
+
+    // Scene bar (bottom right)
+    CONFIG.scenes.forEach((scene, i) => {
+      const btn = document.createElement("button");
+      btn.className = "scene-btn" + (i === state.currentScene ? " active" : "");
+      btn.title = scene.label;
+      btn.setAttribute("aria-label", "Switch to " + scene.label);
+      btn.innerHTML = `<img src="${scene.thumb}" alt="${scene.label}" loading="lazy" />`;
+      btn.addEventListener("click", () => switchScene(i));
+      $sceneBar.appendChild(btn);
+    });
+
+    // Settings scene buttons
+    const settingsScenes = document.getElementById("settings-scenes");
+    CONFIG.scenes.forEach((scene, i) => {
+      const btn = document.createElement("button");
+      btn.className = "settings-scene-btn" + (i === state.currentScene ? " active" : "");
+      btn.setAttribute("aria-label", scene.label);
+      btn.innerHTML = `<img src="${scene.thumb}" alt="${scene.label}" loading="lazy" /><span>${scene.label}</span>`;
+      btn.addEventListener("click", () => switchScene(i));
+      settingsScenes.appendChild(btn);
+    });
+
+    switchScene(state.currentScene);
+  }
+
+  function switchScene(index) {
+    // Hide any custom YT iframe when switching to a preset
+    if (_customYtIframe) {
+      _customYtIframe.classList.remove("active");
+    }
+    sceneFrames.forEach((f, i) => f.classList.toggle("active", i === index));
+    document.querySelectorAll(".scene-btn").forEach((b, i) => b.classList.toggle("active", i === index));
+    document.querySelectorAll(".settings-scene-btn").forEach((b, i) => b.classList.toggle("active", i === index));
+    state.currentScene = index;
+    saveState();
+  }
+
+  /* ── CUSTOM YOUTUBE BG ─────────────────────────────────────── */
+  let _customYtIframe = null;
+
+  // Extract 11-char video ID from any YouTube URL format
+  function extractYouTubeId(input) {
+    input = input.trim();
+    if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+    let m;
+    m = input.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+    if (m) return m[1];
+    m = input.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+    if (m) return m[1];
+    m = input.match(/embed\/([a-zA-Z0-9_-]{11})/);
+    if (m) return m[1];
+    return null;
+  }
+
+  function buildYtEmbedUrl(id, withAudio) {
+    const mute = withAudio ? "" : "&mute=1";
+    return `https://www.youtube.com/embed/${id}?autoplay=1${mute}&loop=1&playlist=${id}&controls=0&disablekb=1&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3`;
+  }
+
+  function applyCustomYouTube(id, withAudio) {
+    // Remove old custom iframe
+    if (_customYtIframe) { _customYtIframe.remove(); _customYtIframe = null; }
+
+    // Deactivate preset scenes
+    sceneFrames.forEach(f => f.classList.remove("active"));
+    document.querySelectorAll(".scene-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".settings-scene-btn").forEach(b => b.classList.remove("active"));
+
+    const iframe = document.createElement("iframe");
+    iframe.className = "scene-iframe active";
+    iframe.setAttribute("allow", "autoplay; encrypted-media");
+    iframe.setAttribute("allowfullscreen", "");
+    iframe.setAttribute("title", "Custom background");
+    iframe.src = buildYtEmbedUrl(id, withAudio);
+    $sceneContainer.appendChild(iframe);
+    _customYtIframe = iframe;
+
+    state.customYtId = id;
+    state.ytAudioOn  = withAudio;
+    saveState();
+  }
+
+  function removeCustomYouTube() {
+    if (_customYtIframe) { _customYtIframe.remove(); _customYtIframe = null; }
+    state.customYtId = null;
+    state.ytAudioOn  = false;
+    saveState();
+    switchScene(state.currentScene);
+  }
+
+  function toggleBgVideo(show) {
+    $sceneContainer.style.opacity = show ? "" : "0";
+    state.bgVideoVisible = show;
+    saveState();
+  }
+
+  // Rebuild custom YT iframe with new audio setting
+  function rebuildCustomYt() {
+    if (!state.customYtId) return;
+    applyCustomYouTube(state.customYtId, state.ytAudioOn);
+  }
+
+  /* ── RING ──────────────────────────────────────────────────── */
+  function updateRing() {
+    const progress = state.totalSecondsRemaining / state.totalSecondsForMode;
+    const offset   = CIRCUMFERENCE * (1 - progress);
+    $ring.style.strokeDashoffset = offset;
+
+    const strokeColor = {work: "var(--clr-work)", short: "var(--clr-short)", long: "var(--clr-long)"}[state.mode];
+    $ring.style.stroke = strokeColor;
+  }
+
+  /* ── UI UPDATE ─────────────────────────────────────────────── */
+  function updateTimerUI() {
+    const timeStr = formatTime(state.totalSecondsRemaining);
+    $timer.textContent        = timeStr;
+    document.title = `${timeStr} — Focus Mode`;
+    updateRing();
+  }
+
+  function updateModeUI() {
+    $modeLabel.textContent = modeLabel(state.mode);
+    $modeLabel.className   = state.mode;
+
+    $modeTabs.forEach(t => {
+      t.classList.toggle("active", t.dataset.mode === state.mode);
+    });
+
+    // Timer color hint
+    const colors = {work:"var(--clr-work)", short:"var(--clr-short)", long:"var(--clr-long)"};
+    $timer.style.textShadow = `0 0 80px ${colors[state.mode]}44`;
+  }
+
+  function updateDotsUI() {
+    $dots.forEach((d, i) => {
+      d.classList.toggle("done", i < state.pomodoroCount);
+    });
+  }
+
+  function updateStatsUI() {
+    $statsSession.textContent = `${state.todaySessions} session${state.todaySessions !== 1 ? "s" : ""}`;
+    $statsMins.textContent    = `${state.todayMins} min${state.todayMins !== 1 ? "s" : ""} focused`;
+    $statsStreak.textContent  = `🔥 ${state.streak} day streak`;
+
+    if (state.showSummaryBtn) $btnSummary.classList.add("visible");
+    else $btnSummary.classList.remove("visible");
+  }
+
+  function updatePlayBtn() {
+    $btnPlay.textContent = state.isRunning ? "⏸" : "▶";
+    $btnPlay.setAttribute("aria-label", state.isRunning ? "Pause" : "Start");
+  }
+
+  function updateSettingsUI() {
+    $sliderWork.value  = state.workDuration;
+    $sliderShort.value = state.shortDuration;
+    $sliderLong.value  = state.longDuration;
+    $valWork.textContent  = state.workDuration;
+    $valShort.textContent = state.shortDuration;
+    $valLong.textContent  = state.longDuration;
+    $toggleAutoBreak.checked = state.autoBreak;
+    $toggleSound.checked     = state.soundOn;
+    $btnSound.textContent    = state.soundOn ? "🔊" : "🔇";
+    $btnSound.classList.toggle("active", state.soundOn);
+  }
+
+  function fullUIRefresh() {
+    updateTimerUI();
+    updateModeUI();
+    updateDotsUI();
+    updateStatsUI();
+    updatePlayBtn();
+    updateSettingsUI();
+  }
+
+  /* ── TIMER LOGIC ───────────────────────────────────────────── */
+  function getDurationForMode(mode) {
+    return { work: state.workDuration, short: state.shortDuration, long: state.longDuration }[mode] * 60;
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    state.totalSecondsForMode   = getDurationForMode(mode);
+    state.totalSecondsRemaining = state.totalSecondsForMode;
+    updateTimerUI();
+    updateModeUI();
+  }
+
+  function startTimer() {
+    if (state.isRunning) return;
+
+    // Request notification permission on first start
+    if (Notification && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
+    state.isRunning = true;
+    updatePlayBtn();
+
+    tickInterval = setInterval(() => {
+      state.totalSecondsRemaining--;
+      updateTimerUI();
+
+      if (state.totalSecondsRemaining <= 0) {
+        clearInterval(tickInterval);
+        tickInterval = null;
+        state.isRunning = false;
+        onSessionComplete();
+      }
+    }, 1000);
+  }
+
+  function pauseTimer() {
+    if (!state.isRunning) return;
+    clearInterval(tickInterval);
+    tickInterval    = null;
+    state.isRunning = false;
+    updatePlayBtn();
+  }
+
+  function toggleTimer() {
+    state.isRunning ? pauseTimer() : startTimer();
+  }
+
+  function resetTimer() {
+    pauseTimer();
+    state.totalSecondsRemaining = getDurationForMode(state.mode);
+    state.totalSecondsForMode   = state.totalSecondsRemaining;
+    updateTimerUI();
+    updatePlayBtn();
+  }
+
+  function skipSession() {
+    pauseTimer();
+    onSessionComplete(true);
+  }
+
+  /* ── SESSION COMPLETE ──────────────────────────────────────── */
+  function onSessionComplete(skipped = false) {
+    updatePlayBtn();
+
+    if (state.mode === "work" && !skipped) {
+      // Record completed work session
+      state.todaySessions++;
+      state.todayMins += state.workDuration;
+      state.showSummaryBtn = true;
+
+      // Streak logic
+      const today = todayStr();
+      if (state.todayKey !== today) {
+        // We're in a fresh day now
+        state.todayKey = today;
+      }
+      if (state.lastActiveDay !== today) {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,"0")}-${String(yesterday.getDate()).padStart(2,"0")}`;
+        state.streak = (state.lastActiveDay === yStr) ? state.streak + 1 : 1;
+        state.lastActiveDay = today;
+      }
+
+      // Advance pomodoro count
+      state.pomodoroCount = (state.pomodoroCount + 1) % CONFIG.pomodorosUntilLong;
+
+      saveState();
+      updateStatsUI();
+      updateDotsUI();
+    }
+
+    showSessionFlash(state.mode === "work" && !skipped ? "Session Complete ✓" : "Skipping…");
+
+    // Bell / notification
+    if (!skipped) {
+      playBell();
+      sendNotification();
+    }
+
+    // Transition to next mode
+    const nextMode = determineNextMode(skipped);
+    setTimeout(() => {
+      setMode(nextMode);
+      if (state.autoBreak || nextMode !== "work") {
+        setTimeout(() => startTimer(), 800);
+      }
+    }, 1200);
+  }
+
+  function determineNextMode(skipped) {
+    if (state.mode === "work") {
+      // Check if we just hit 4 pomodoros (pomodoroCount wraps back to 0)
+      return (state.pomodoroCount === 0 && !skipped) ? "long" : "short";
+    }
+    return "work";
+  }
+
+  /* ── VISUAL EFFECTS ────────────────────────────────────────── */
+  function showSessionFlash(msg) {
+    $toastText.textContent = msg;
+    $flash.classList.add("pop");
+    setTimeout(() => $flash.classList.remove("pop"), 150);
+    setTimeout(() => {
+      $toast.classList.add("show");
+      setTimeout(() => $toast.classList.remove("show"), 2500);
+    }, 200);
+  }
+
+  /* ── AUDIO ─────────────────────────────────────────────────── */
+  function toggleSound() {
+    state.soundOn = !state.soundOn;
+    if (state.soundOn) startRain();
+    else stopRain();
+    updateSettingsUI();
+    saveState();
+  }
+
+  /* ── NOTIFICATIONS ─────────────────────────────────────────── */
+  function sendNotification() {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const msgs = {
+      work:  { title: "Break time! 🎉", body: "Great session. Take a breather." },
+      short: { title: "Back to work! 💪", body: "Short break done. Let's crush it." },
+      long:  { title: "Long break done! 🔥", body: "You're on a roll. Start your next session." },
+    };
+    const m = msgs[state.mode];
+    new Notification(m.title, { body: m.body, icon: "" });
+  }
+
+  /* ── SETTINGS PANEL ────────────────────────────────────────── */
+  function openSettings() {
+    $settingsPanel.classList.add("open");
+    $settingsPanel.setAttribute("aria-hidden", "false");
+    $btnSettings.classList.add("active");
+  }
+  function closeSettings() {
+    $settingsPanel.classList.remove("open");
+    $settingsPanel.setAttribute("aria-hidden", "true");
+    $btnSettings.classList.remove("active");
+  }
+
+  $btnSettings.addEventListener("click", () => $settingsPanel.classList.contains("open") ? closeSettings() : openSettings());
+  $settingsClose.addEventListener("click", closeSettings);
+
+  $sliderWork.addEventListener("input", () => {
+    state.workDuration = +$sliderWork.value;
+    $valWork.textContent = state.workDuration;
+    if (state.mode === "work") resetTimer();
+    saveState();
+  });
+  $sliderShort.addEventListener("input", () => {
+    state.shortDuration = +$sliderShort.value;
+    $valShort.textContent = state.shortDuration;
+    if (state.mode === "short") resetTimer();
+    saveState();
+  });
+  $sliderLong.addEventListener("input", () => {
+    state.longDuration = +$sliderLong.value;
+    $valLong.textContent = state.longDuration;
+    if (state.mode === "long") resetTimer();
+    saveState();
+  });
+  $toggleAutoBreak.addEventListener("change", () => {
+    state.autoBreak = $toggleAutoBreak.checked;
+    saveState();
+  });
+  $toggleSound.addEventListener("change", () => toggleSound());
+
+  $btnResetAll.addEventListener("click", () => {
+    if (confirm("Are you sure you want to reset all settings and focus data? This cannot be undone.")) {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(SUMMARY_KEY);
+      window.location.reload();
+    }
+  });
+
+  /* ── MODE TABS ─────────────────────────────────────────────── */
+  $modeTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      pauseTimer();
+      setMode(tab.dataset.mode);
+    });
+  });
+
+  /* ── CONTROLS ──────────────────────────────────────────────── */
+  $btnPlay.addEventListener("click",  toggleTimer);
+  $btnReset.addEventListener("click", resetTimer);
+  $btnSkip.addEventListener("click",  skipSession);
+  $btnSound.addEventListener("click", toggleSound);
+
+  /* ── SUMMARY MODAL ─────────────────────────────────────────── */
+  function openSummary() {
+    $summaryModal.classList.add("open");
+    loadPastSummaries();
+    $summaryInput.focus();
+  }
+  function closeSummary() {
+    $summaryModal.classList.remove("open");
+    $aiResult.classList.remove("show");
+  }
+
+  $btnSummary.addEventListener("click", openSummary);
+  $summaryClose.addEventListener("click", closeSummary);
+  $summaryModal.addEventListener("click", e => { if (e.target === $summaryModal) closeSummary(); });
+
+  function loadPastSummaries() {
+    const list = loadSummaries();
+    if (list.length === 0) {
+      $pastList.innerHTML = `<p style="font-size:0.8rem;color:var(--clr-muted)">No summaries yet — complete your first session!</p>`;
+      return;
+    }
+    $pastList.innerHTML = list.map(entry => `
+      <div class="past-entry">
+        <div class="past-entry-date">${entry.date}</div>
+        <div class="past-entry-text">${entry.summary.replace(/\n/g,"<br/>")}</div>
+      </div>
+    `).join("");
+  }
+
+  /* ── GEMINI API CALL ───────────────────────────────────────── */
+  async function callGeminiAPI(userInput) {
+    const GEMINI_MODEL = "gemini-1.5-flash";
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`;
+
+    const prompt = `
+You are a motivational productivity coach. A user just finished their Pomodoro sessions for today.
+
+Session data:
+- Total sessions completed today: ${state.todaySessions}
+- Total focus time today: ${state.todayMins} minutes
+- Current streak: ${state.streak} day(s)
+
+What they accomplished today (in their own words):
+"${userInput}"
+
+Write a short, heartfelt, motivational summary in a casual Hinglish/English mix (like a friend would talk). 
+It should:
+1. Start with something like "Aaj tune X sessions kiye, Y minutes focus kiya."
+2. Acknowledge what they got done from their input
+3. End with something encouraging for tomorrow
+4. Keep it under 100 words
+5. Be genuine, not cringe — like a cool, supportive friend
+
+Just the summary text, no formatting, no markdown.
+`.trim();
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.85, maxOutputTokens: 200 }
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `API error ${res.status}`);
+    }
+
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "Could not generate summary.";
+  }
+
+  /* ── Generate button handler ───────────────────────────────── */
+  $btnGenerate.addEventListener("click", async () => {
+    const input = $summaryInput.value.trim();
+    if (!input) {
+      $summaryInput.style.borderColor = "rgba(239,68,68,0.6)";
+      setTimeout(() => $summaryInput.style.borderColor = "", 1200);
+      return;
+    }
+
+    if (!GEMINI_KEY) {
+      $aiResult.classList.add("show");
+      $aiText.textContent = "⚠️ Please add your Gemini API key in the CONFIG section at the top of this file (const GEMINI_KEY = \"...\").";
+      return;
+    }
+
+    // Show loading
+    $genLabel.classList.add("hidden");
+    $genSpinner.classList.remove("hidden");
+    $btnGenerate.disabled = true;
+    $aiResult.classList.remove("show");
+
+    try {
+      const summary = await callGeminiAPI(input);
+      $aiText.textContent = summary;
+      $aiResult.classList.add("show");
+
+      // Save to localStorage
+      const entry = {
+        date: new Date().toLocaleDateString("en-IN", { weekday:"short", day:"numeric", month:"short", year:"numeric" }),
+        userInput: input,
+        summary,
+        sessions: state.todaySessions,
+        mins: state.todayMins,
+      };
+      saveSummary(entry);
+      loadPastSummaries();
+    } catch (err) {
+      $aiText.textContent = `Error: ${err.message}. Please check your API key and try again.`;
+      $aiResult.classList.add("show");
+    } finally {
+      $genLabel.classList.remove("hidden");
+      $genSpinner.classList.add("hidden");
+      $btnGenerate.disabled = false;
+    }
+  });
+
+  /* ── KEYBOARD SHORTCUTS ────────────────────────────────────── */
+  document.addEventListener("keydown", e => {
+    if ($summaryModal.classList.contains("open")) return;
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.code === "Space") { e.preventDefault(); toggleTimer(); }
+    if (e.code === "KeyR")  resetTimer();
+    if (e.code === "KeyS")  toggleSound();
+  });
+
+  /* ── MIDNIGHT RESET CHECKER ────────────────────────────────── */
+  function scheduleMidnightReset() {
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+    const ms   = next - now;
+    setTimeout(() => {
+      state.todaySessions  = 0;
+      state.todayMins      = 0;
+      state.showSummaryBtn = false;
+      state.pomodoroCount  = 0;
+      state.todayKey       = todayStr();
+      saveState();
+      updateStatsUI();
+      updateDotsUI();
+      scheduleMidnightReset();
+    }, ms);
+  }
+
+  /* ── CUSTOM YT + BG TOGGLE EVENTS ─────────────────────────── */
+  $btnApplyYt.addEventListener("click", () => {
+    const val = $customYtInput.value.trim();
+    if (!val) { $ytStatus.textContent = "⚠ Paste a YouTube URL or video ID first."; return; }
+    const id = extractYouTubeId(val);
+    if (!id) { $ytStatus.textContent = "⚠ Couldn't find a valid video ID."; return; }
+    $ytStatus.textContent = `✓ Applying "${id}"…`;
+    applyCustomYouTube(id, state.ytAudioOn);
+    setTimeout(() => { $ytStatus.textContent = `✓ Playing: ${id}`; }, 1200);
+  });
+
+  $customYtInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") $btnApplyYt.click();
+  });
+
+  $toggleBgVideo.addEventListener("change", () => toggleBgVideo($toggleBgVideo.checked));
+
+  $toggleYtAudio.addEventListener("change", () => {
+    state.ytAudioOn = $toggleYtAudio.checked;
+    if (state.customYtId) rebuildCustomYt();
+    else saveState();
+  });
+
+  // Suggestion chips — click to auto-fill + apply instantly
+  document.querySelectorAll(".yt-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const id = chip.dataset.ytid;
+      $customYtInput.value = id;
+      $ytStatus.textContent = `✓ Applying "${chip.textContent.trim()}"…`;
+      applyCustomYouTube(id, state.ytAudioOn);
+      setTimeout(() => { $ytStatus.textContent = `✓ Playing: ${chip.textContent.trim()}`; }, 1200);
+    });
+  });
+
+  /* ── INIT ──────────────────────────────────────────────────── */
+  function init() {
+    loadState();
+    buildScenes();
+
+    state.totalSecondsRemaining = state.workDuration * 60;
+    state.totalSecondsForMode   = state.workDuration * 60;
+    state.mode = "work";
+
+    fullUIRefresh();
+    scheduleMidnightReset();
+
+    // Restore custom YouTube BG
+    if (state.customYtId) {
+      $customYtInput.value = state.customYtId;
+      $ytStatus.textContent = `✓ Playing: ${state.customYtId}`;
+      $toggleYtAudio.checked = state.ytAudioOn;
+      // Slight delay so sceneFrames are already built
+      setTimeout(() => applyCustomYouTube(state.customYtId, state.ytAudioOn), 500);
+    }
+
+    // Restore bg video visibility
+    $toggleBgVideo.checked = state.bgVideoVisible !== false;
+    if (state.bgVideoVisible === false) {
+      $sceneContainer.style.opacity = "0";
+    }
+
+    // Sound state reset (browser blocks AudioContext before user gesture)
+    if (state.soundOn) {
+      state.soundOn = false;
+      updateSettingsUI();
+    }
+
+    console.log("🎯 FocusMode loaded. Space=play, R=reset, S=sound.");
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
