@@ -89,6 +89,37 @@
     }
     .scene-iframe.active { opacity: 0.35; }
 
+    /* ── iOS tap-to-play button ─────────────────────────────────── */
+    #video-tap-btn {
+      display: none;
+      position: fixed;
+      bottom: 90px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 11;
+      background: rgba(255,255,255,0.12);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 50px;
+      padding: 8px 18px;
+      color: rgba(255,255,255,0.7);
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      gap: 6px;
+      align-items: center;
+      white-space: nowrap;
+      transition: all 0.3s ease;
+    }
+    #video-tap-btn.visible { display: flex; }
+    #video-tap-btn:hover { background: rgba(255,255,255,0.2); }
+    /* On touch devices, show it; on hover-capable devices hide it */
+    @media (hover: none) {
+      #video-tap-btn.visible { display: flex; }
+    }
+
     /* Dark gradient overlay */
     #overlay {
       position: fixed;
@@ -865,6 +896,9 @@
         <div id="timer-display" role="timer" aria-live="off">25:00</div>
       </div>
 
+      <!-- iOS tap-to-play helper -->
+      <!-- (inserted into DOM via JS, placed in stats area) -->
+
       <!-- Controls -->
       <div id="controls">
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
@@ -900,6 +934,11 @@
     <span class="sep">·</span>
     <span id="stat-streak">🔥 0 day streak</span>
   </div>
+
+  <!-- iOS tap-to-play video button -->
+  <button id="video-tap-btn" aria-label="Tap to start background video">
+    ▶️ Tap to play video
+  </button>
 
   <!-- Scene switcher (bottom right) -->
   <div id="scene-bar"></div>
@@ -1263,11 +1302,12 @@
     CONFIG.scenes.forEach((scene, i) => {
       const iframe = document.createElement("iframe");
       iframe.className = "scene-iframe";
-      iframe.setAttribute("allow", "autoplay; encrypted-media");
+      iframe.setAttribute("allow", "autoplay; fullscreen; encrypted-media; accelerometer; gyroscope; picture-in-picture");
       iframe.setAttribute("allowfullscreen", "");
+      iframe.setAttribute("webkit-allow-fullscreen", "");
       iframe.setAttribute("title", scene.label + " background");
       // autoplay, mute, loop, controls hidden via modestbranding
-      iframe.src = `https://www.youtube.com/embed/${scene.id}?autoplay=1&mute=1&loop=1&playlist=${scene.id}&controls=0&disablekb=1&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3&playsinline=1`;
+      iframe.src = `https://www.youtube.com/embed/${scene.id}?autoplay=1&mute=1&loop=1&playlist=${scene.id}&controls=0&disablekb=1&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3&playsinline=1&enablejsapi=1`;
       container.appendChild(iframe);
       sceneFrames.push(iframe);
     });
@@ -1327,8 +1367,11 @@
   }
 
   function buildYtEmbedUrl(id, withAudio) {
-    const mute = withAudio ? "" : "&mute=1";
-    return `https://www.youtube.com/embed/${id}?autoplay=1${mute}&loop=1&playlist=${id}&controls=0&disablekb=1&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3&playsinline=1`;
+    const mute    = withAudio ? "" : "&mute=1";
+    // When audio is ON, show controls (controls=1) so user can unmute
+    // directly inside the player — required on iOS Safari
+    const ctrl    = withAudio ? "controls=1" : "controls=0&disablekb=1";
+    return `https://www.youtube.com/embed/${id}?autoplay=1${mute}&loop=1&playlist=${id}&${ctrl}&modestbranding=1&showinfo=0&rel=0&iv_load_policy=3&playsinline=1&enablejsapi=1`;
   }
 
   function applyCustomYouTube(id, withAudio) {
@@ -1342,8 +1385,9 @@
 
     const iframe = document.createElement("iframe");
     iframe.className = "scene-iframe active";
-    iframe.setAttribute("allow", "autoplay; encrypted-media");
+    iframe.setAttribute("allow", "autoplay; fullscreen; encrypted-media; accelerometer; gyroscope; picture-in-picture");
     iframe.setAttribute("allowfullscreen", "");
+    iframe.setAttribute("webkit-allow-fullscreen", "");
     iframe.setAttribute("title", "Custom background");
     iframe.src = buildYtEmbedUrl(id, withAudio);
     $sceneContainer.appendChild(iframe);
@@ -1784,6 +1828,52 @@ Just the summary text, no formatting, no markdown.
       $btnGenerate.disabled = false;
     }
   });
+
+  /* ── iOS TAP-TO-PLAY VIDEO ────────────────────────────────── */
+  const $videoTapBtn = document.getElementById("video-tap-btn");
+
+  // Detect iOS (Safari on iPhone/iPad)
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  function getActiveIframe() {
+    // Custom YT iframe takes priority
+    if (_customYtIframe && _customYtIframe.classList.contains("active")) return _customYtIframe;
+    return sceneFrames.find(f => f.classList.contains("active")) || null;
+  }
+
+  function triggerIosVideoPlay() {
+    const iframe = getActiveIframe();
+    if (!iframe) return;
+
+    // Temporarily allow pointer events so iOS can receive the touch
+    iframe.style.pointerEvents = "auto";
+    $sceneContainer.style.pointerEvents = "auto";
+
+    // Simulate a touch in the center of the iframe
+    const rect   = iframe.getBoundingClientRect();
+    const cx     = rect.left + rect.width  / 2;
+    const cy     = rect.top  + rect.height / 2;
+    const touch  = new Touch({ identifier: Date.now(), target: iframe, clientX: cx, clientY: cy });
+    const touchEvt = new TouchEvent("touchstart", { touches: [touch], bubbles: true, cancelable: true });
+    iframe.dispatchEvent(touchEvt);
+
+    // Restore pointer-events-none after a tick
+    setTimeout(() => {
+      iframe.style.pointerEvents = "";
+      $sceneContainer.style.pointerEvents = "";
+    }, 600);
+
+    // Hide the button
+    $videoTapBtn.classList.remove("visible");
+  }
+
+  // Show tap-to-play button only on iOS / touch devices
+  if (isIOS || navigator.maxTouchPoints > 0) {
+    // Wait until page is settled, then show
+    setTimeout(() => $videoTapBtn.classList.add("visible"), 2000);
+    $videoTapBtn.addEventListener("click", triggerIosVideoPlay);
+  }
 
   /* ── KEYBOARD SHORTCUTS ────────────────────────────────────── */
   document.addEventListener("keydown", e => {
